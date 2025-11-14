@@ -1,4 +1,4 @@
-# Dockerfile — ready to copy
+# Dockerfile — edited to create uploads dir and allow PORT expansion
 FROM python:3.11-slim
 
 # --- metadata / working dir ---
@@ -24,18 +24,22 @@ RUN python -m pip install --upgrade pip setuptools wheel && \
 # Copy application code
 COPY . /app
 
-# Create a less-privileged user and use it
+# Create uploads dir and ensure it's owned by the app user (fixes PermissionError)
+RUN mkdir -p /app/uploads
+
+# Create a less-privileged user and make them owner of /app
 RUN useradd --create-home appuser || true
+RUN chown -R appuser:appuser /app
+
+# Switch to non-root user
 USER appuser
 
 # Expose port Railway will map (use 8080)
 EXPOSE 8080
 
 # --- DEFAULT CMD ---
-# NOTE: ensure your app exposes the callable referenced below.
-# If your Flask app defines "app = Flask(__name__)" use app:app
-# If it exports an ASGI variable named `asgi_app`, change to app:asgi_app
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--worker-class", "uvicorn.workers.UvicornWorker", "app:app"]
+# Use shell form so $PORT (if supplied) expands; default to 8080
+CMD gunicorn --bind 0.0.0.0:${PORT:-8080} --workers 1 --worker-class uvicorn.workers.UvicornWorker app:app
 
 # Optional healthcheck (uncomment to use)
 # HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD curl -f http://localhost:8080/ || exit 1
