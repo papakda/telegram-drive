@@ -4,6 +4,9 @@ import io
 import base64
 import traceback
 import sys
+import tempfile
+from pathlib import Path
+
 # Import Flask's 'session' to store data in browser cookies
 from flask import Flask, request, jsonify, send_file, render_template, session
 from telethon import TelegramClient
@@ -19,12 +22,29 @@ API_HASH = 'c9222d33aea71740de812a2b7dc3226d'
 
 app = Flask(__name__)
 # Use an Environment Variable for the secret key
-# Ensure you set FLASK_SECRET_KEY in GCP Cloud Run environment variables
+# Ensure you set FLASK_SECRET_KEY in environment variables in Railway/Render/etc.
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', 'a-default-fallback-key-should-be-set-in-env')
 
-# Create uploads directory if it doesn't exist
-# Note: On Cloud Run, this directory is temporary (ephemeral)
-os.makedirs('uploads', exist_ok=True)
+# --- Safe uploads directory handling ---
+def ensure_upload_dir():
+    """
+    Ensure we have a writable uploads folder.
+    Prefer './uploads', but if creation fails (permission error),
+    fall back to a directory in the system temp directory.
+    """
+    preferred = Path('uploads')
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        return str(preferred)
+    except PermissionError:
+        # fallback to system temp dir which is writable in containers
+        fallback = Path(tempfile.gettempdir()) / "telegram_drive_uploads"
+        fallback.mkdir(parents=True, exist_ok=True)
+        return str(fallback)
+
+UPLOAD_FOLDER = ensure_upload_dir()
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+print(f"Using upload folder: {UPLOAD_FOLDER}", flush=True)
 
 # --- 2. WEB PAGE ROUTE ---
 @app.route('/')
@@ -263,7 +283,7 @@ async def download_file(message_id):
         traceback.print_exc(file=sys.stderr)
         return "Error processing download", 500
     finally:
-        if client.is_connected():
+        if client and client.is_connected():
             await client.disconnect()
 
 @app.route('/api/upload', methods=['POST'])
@@ -279,7 +299,7 @@ async def upload_file():
         from werkzeug.utils import secure_filename
         safe_filename = secure_filename(file.filename)
         if not safe_filename: import time; safe_filename = f"upload_{int(time.time())}"
-        temp_path = os.path.join('uploads', safe_filename)
+        temp_path = os.path.join(app.config.get('UPLOAD_FOLDER', 'uploads'), safe_filename)
         file.save(temp_path)
         print(f"--- Uploading file: {safe_filename} ---", flush=True)
         await client.send_file('me', temp_path, caption=safe_filename)
@@ -301,4 +321,3 @@ async def upload_file():
 asgi_app = WsgiToAsgi(app)
 
 # The if __name__ == '__main__': block is removed as Gunicorn/Cloud Run doesn't use it.
-
